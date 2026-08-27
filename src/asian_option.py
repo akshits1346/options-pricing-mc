@@ -62,6 +62,10 @@ def monte_carlo_asian_call(S0: float, K: float, r: float, sigma: float, T: float
     arithmetic and geometric payoffs against the EXACT SAME simulated
     paths, which is what makes the AM-GM pathwise-dominance test in
     test_asian_option.py an exact inequality rather than a statistical one.
+    If `paths` is supplied directly, the `antithetic` argument here must
+    still correctly describe whether those paths were generated
+    antithetically -- it controls how std_error is computed, not just
+    how paths are simulated.
     """
     if average_type not in ("arithmetic", "geometric"):
         raise ValueError("average_type must be 'arithmetic' or 'geometric'")
@@ -80,6 +84,32 @@ def monte_carlo_asian_call(S0: float, K: float, r: float, sigma: float, T: float
     discounted_payoffs = math.exp(-r * T) * payoffs
 
     price = float(discounted_payoffs.mean())
-    std_error = float(discounted_payoffs.std(ddof=1) / math.sqrt(len(discounted_payoffs)))
+    std_error = _standard_error(discounted_payoffs, antithetic)
 
     return MonteCarloResult(price=price, std_error=std_error)
+
+
+def _standard_error(discounted_payoffs: np.ndarray, antithetic: bool) -> float:
+    """
+    THIS FUNCTION EXISTS BECAUSE OF A BUG I FOUND WHILE TESTING: computing
+    std_error as discounted_payoffs.std(ddof=1)/sqrt(n) treats every path
+    as an independent sample, which is correct for plain Monte Carlo but
+    WRONG for antithetic sampling -- half the paths are deliberately
+    correlated (negatively) with the other half, by construction. Treating
+    them as independent doesn't just give a slightly-off number, it hides
+    the entire benefit of antithetic variates: a direct empirical check
+    (see the commit that introduced this fix) showed antithetic pairs have
+    a real correlation of about -0.50, but the naive standard error showed
+    ~0% variance reduction instead of the ~50% the correlation implies.
+
+    The correct approach for antithetic sampling: form n/2 pair-averages
+    ((Y_i + Y_i')/2 for each antithetic pair), then compute standard
+    error across THOSE n/2 values, not across all n raw payoffs.
+    """
+    n = len(discounted_payoffs)
+    if not antithetic:
+        return float(discounted_payoffs.std(ddof=1) / math.sqrt(n))
+
+    half = n // 2
+    pair_averages = (discounted_payoffs[:half] + discounted_payoffs[half:]) / 2.0
+    return float(pair_averages.std(ddof=1) / math.sqrt(half))
