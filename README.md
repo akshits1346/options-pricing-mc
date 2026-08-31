@@ -27,6 +27,12 @@ barrier_option.py       -- down-and-out call via MC, validated against
 
 implied_vol.py          -- Newton-Raphson implied vol solver with
                            bisection fallback for low-vega regimes
+
+vol_surface.py           -- fits implied vol pointwise across a grid of
+                           (strike, maturity) quotes, then checks the
+                           resulting surface for calendar-spread and
+                           butterfly (strike-convexity) static
+                           no-arbitrage violations
 ```
 
 ## Build & test
@@ -39,9 +45,10 @@ python3 tests/test_binomial_tree.py     # 7 checks
 python3 tests/test_asian_option.py      # 4 checks
 python3 tests/test_barrier_option.py    # 3 checks
 python3 tests/test_implied_vol.py       # 5 checks
+python3 tests/test_vol_surface.py       # 10 checks
 ```
 
-27 checks total, all passing.
+37 checks total, all passing.
 
 ## Validation strategy
 
@@ -68,6 +75,38 @@ error, not an arbitrary tolerance):
   as the barrier becomes unreachable (~1.7 SE).
 - **Implied volatility**: round-trip test -- price at a known sigma,
   recover that exact sigma from the price, to near machine precision.
+- **Vol surface**: round-trip test on a flat, known-sigma surface
+  (guaranteed arbitrage-free -- it's just Black-Scholes with one sigma)
+  for "does it correctly find nothing wrong," PLUS deliberately
+  hand-constructed calendar and butterfly violations (built directly
+  via `VolSurface.from_grid()`, bypassing the solver) for "does it
+  actually catch a real violation" -- see below.
+
+## A volatility surface, not just a point solve
+
+Solving implied vol at one (strike, maturity) point at a time, as
+`implied_vol.py` does, doesn't guarantee those points are *consistent*
+with each other. `vol_surface.py` fits a full grid and checks it for the
+two classic static no-arbitrage conditions:
+
+- **No calendar arbitrage**: total implied variance `sigma^2 * T` must
+  be non-decreasing in `T` at fixed strike -- otherwise a calendar
+  spread (long the longer-dated option, short the shorter, same
+  strike) is risk-free money.
+- **No butterfly arbitrage**: price must be convex in strike at fixed
+  maturity (equivalently, the Breeden-Litzenberger risk-neutral density
+  must stay non-negative) -- otherwise a butterfly spread (long the
+  wings, short 2x the body) has negative cost and a non-negative
+  payoff.
+
+The detector is tested on both sides: a flat, genuinely arbitrage-free
+surface produces zero flagged violations, and two deliberately broken
+surfaces (one with total variance decreasing across maturities, one
+with an artificially spiked mid-strike vol that breaks strike-convexity)
+are each caught with exactly one flagged violation, verified to be the
+correct one by construction. A checker that never fires is
+indistinguishable from a checker that isn't wired up correctly without
+this half of the test.
 
 ## Two real bugs, found and fixed
 
@@ -108,9 +147,16 @@ realistic near-expiry case instead of that degenerate extreme.
 - The binomial tree doesn't model dividends; American-call-equals-
   European-call would no longer hold with a dividend-paying underlying.
 
+- The vol surface's arbitrage checks are static (calendar and
+  butterfly conditions on the fitted grid), not a full arbitrage-free
+  parametric fit (e.g. SVI) -- it flags violations in a surface built
+  from independently-solved points, it doesn't yet produce a smoothed,
+  guaranteed-arbitrage-free surface from sparse/noisy market quotes.
+
 ## What I'd build next
 
 - Control variates for the arithmetic Asian option
 - Dividend-adjusted binomial tree and Black-Scholes
-- A full implied volatility surface (across strikes and maturities)
-  rather than single-point solves
+- Fit a parametric arbitrage-free surface (e.g. SVI) through noisy
+  synthetic market quotes, rather than only checking a grid of
+  independently-solved points for violations after the fact
