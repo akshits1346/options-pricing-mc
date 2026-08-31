@@ -33,6 +33,12 @@ vol_surface.py           -- fits implied vol pointwise across a grid of
                            resulting surface for calendar-spread and
                            butterfly (strike-convexity) static
                            no-arbitrage violations
+
+svi.py                   -- fits a smooth 5-parameter SVI curve through
+                           a single-maturity smile (rather than one
+                           independent solve per strike), then checks
+                           the fitted curve for arbitrage on a fine grid
+                           by reusing vol_surface.py's checker
 ```
 
 ## Build & test
@@ -46,9 +52,10 @@ python3 tests/test_asian_option.py      # 8 checks (incl. control variates)
 python3 tests/test_barrier_option.py    # 3 checks
 python3 tests/test_implied_vol.py       # 5 checks
 python3 tests/test_vol_surface.py       # 10 checks
+python3 tests/test_svi.py               # 9 checks
 ```
 
-50 checks total, all passing.
+59 checks total, all passing.
 
 ## Validation strategy
 
@@ -136,6 +143,38 @@ correct one by construction. A checker that never fires is
 indistinguishable from a checker that isn't wired up correctly without
 this half of the test.
 
+## SVI: fitting a smooth curve through a smile, not just solving points
+
+`vol_surface.py` checks a grid of independently-solved implied vols
+for arbitrage after the fact. `svi.py` takes the complementary
+approach: fit ONE smooth, 5-parameter curve
+(`w(k) = a + b*(rho*(k-m) + sqrt((k-m)^2 + sigma^2))`, raw SVI, Gatheral)
+through noisy quotes at a single maturity, so the whole smile comes
+from one coherent function instead of one solve per strike.
+
+**Parameter recovery test** (the same round-trip philosophy used
+throughout this project): generate quotes from a KNOWN SVI parameter
+set, add ~20bp of Gaussian noise (simulating realistic quote noise),
+fit SVI back out, and check the fit lands close to the true parameters
+-- `a`, `b`, `sigma` all recover within a few percent, `rho` within
+0.1, and the fitted curve tracks the noisy input to within 35bp max
+error.
+
+**On the arbitrage check itself, a deliberate design choice worth
+explaining**: Gatheral & Jacquier's paper on arbitrage-free SVI gives
+an analytic local no-butterfly-arbitrage condition, but this project
+was built with no internet access to verify that formula against the
+source (see the orderbook-engine repo's honest-limitations note on the
+same sandboxing) -- and shipping an unverified formula as a "rigor"
+check, in a project whose whole ethos is not overclaiming, would be
+exactly the kind of thing to avoid. Instead, `check_svi_butterfly_arbitrage`
+evaluates the fitted curve on a fine strike grid and reuses
+`vol_surface.py`'s ALREADY-INDEPENDENTLY-TESTED `check_butterfly_arbitrage`.
+Tested both ways again: the realistic recovered fit is clean (zero
+violations), and deliberately extreme parameters (`b=5.0, rho=-0.99,
+sigma=0.01` -- found by directly trying them and observing the checker
+fire, not by citing a formula) ARE flagged, 29 violations across the grid.
+
 ## Dividends
 
 `black_scholes_price` / `black_scholes_greeks` / `binomial_tree_price`
@@ -203,11 +242,19 @@ realistic near-expiry case instead of that degenerate extreme.
   assumption for both Black-Scholes and a CRR tree, but a real
   dividend-paying stock pays discrete amounts on discrete dates, which
   a continuous yield only approximates.
-- The vol surface's arbitrage checks are static (calendar and
-  butterfly conditions on the fitted grid), not a full arbitrage-free
-  parametric fit (e.g. SVI) -- it flags violations in a surface built
-  from independently-solved points, it doesn't yet produce a smoothed,
-  guaranteed-arbitrage-free surface from sparse/noisy market quotes.
+- `svi.py` fits and checks ONE maturity slice at a time -- it doesn't
+  fit a full surface jointly across maturities, so it has no calendar-
+  arbitrage check of its own (nothing stops two independently-fit SVI
+  slices at different T from crossing) and the fit isn't constrained
+  to be arbitrage-free DURING fitting, only checked for it afterward
+  (least_squares can converge to parameters that are well-defined
+  (`b>=0, |rho|<1, sigma>0`) but still fail the butterfly check --
+  that's the whole reason `check_svi_butterfly_arbitrage` is a
+  separate, explicit step rather than assumed from the bounds alone).
+- `vol_surface.py`'s own grid-based checks remain static (they flag
+  violations after the fact in a surface built from independently-
+  solved points; `svi.py` is the parametric-fit alternative to that,
+  not a full replacement, since it only handles one slice at a time).
 
 ## What I'd build next
 
@@ -215,6 +262,7 @@ realistic near-expiry case instead of that degenerate extreme.
   (Black-Scholes itself is a natural control for vanilla MC)
 - Discrete (not just continuous-yield) dividend dates for the binomial
   tree -- the harder, more realistic version of the dividend work above
-- Fit a parametric arbitrage-free surface (e.g. SVI) through noisy
-  synthetic market quotes, rather than only checking a grid of
-  independently-solved points for violations after the fact
+- Extend svi.py across maturities: fit a slice per T, then run
+  vol_surface.py's calendar check ACROSS the fitted slices, and
+  constrain the fits jointly (e.g. Gatheral & Jacquier's full
+  surface-level conditions) rather than checking each slice in isolation
