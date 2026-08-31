@@ -42,13 +42,13 @@ pip3 install numpy scipy
 
 python3 tests/test_black_scholes.py     # 14 checks (incl. dividend yield q)
 python3 tests/test_binomial_tree.py     # 10 checks (incl. dividend yield q)
-python3 tests/test_asian_option.py      # 4 checks
+python3 tests/test_asian_option.py      # 8 checks (incl. control variates)
 python3 tests/test_barrier_option.py    # 3 checks
 python3 tests/test_implied_vol.py       # 5 checks
 python3 tests/test_vol_surface.py       # 10 checks
 ```
 
-46 checks total, all passing.
+50 checks total, all passing.
 
 ## Validation strategy
 
@@ -69,7 +69,9 @@ error, not an arbitrary tolerance):
   standard errors at 200k paths.
 - **Asian option**: arithmetic MC price is guaranteed `>=` geometric MC
   price on the *same* simulated paths (AM-GM, exact); geometric MC
-  converges to a self-derived exact closed form within ~1.6 SE.
+  converges to a self-derived exact closed form within ~1.6 SE; the
+  control-variate estimator (below) agrees with the plain estimator
+  within 3 SE of the far noisier plain price.
 - **Barrier option**: down-and-out price is guaranteed `<=` vanilla
   price on the same paths (exact); converges to vanilla Black-Scholes
   as the barrier becomes unreachable (~1.7 SE).
@@ -81,6 +83,32 @@ error, not an arbitrary tolerance):
   hand-constructed calendar and butterfly violations (built directly
   via `VolSurface.from_grid()`, bypassing the solver) for "does it
   actually catch a real violation" -- see below.
+
+## Control variates: a 99.9% variance reduction, and why it's so much bigger than antithetic's
+
+`monte_carlo_asian_call_control_variate` uses the geometric Asian's
+EXACT closed form as a control variate for the arithmetic Asian: on
+the SAME simulated paths, `Y_cv_i = Y_i - beta*(X_i - E[X])`, where
+`Y_i`/`X_i` are the arithmetic/geometric discounted payoffs on path
+`i`, `E[X]` is the geometric price's known exact value (not estimated),
+and `beta` is fit from the sample to minimize variance. `mean(Y_cv)` is
+still an unbiased estimator of the arithmetic price for any beta, since
+`(X_i - E[X])` has mean zero by construction.
+
+At 100,000 paths, same seed, same everything else: **99.92% variance
+reduction** (a ~36x smaller standard error) versus antithetic variates'
+~51% found earlier. The gap makes sense once you look at WHY each
+technique works: antithetic variates exploit negative correlation
+between a path and its mirror image (a real but limited effect,
+correlation ~ -0.50); control variates here exploit correlation between
+TWO DIFFERENT AVERAGES OF THE SAME PATH -- the arithmetic and geometric
+averages of the identical simulated price sequence, which are far more
+tightly correlated with each other than any path is with its
+antithetic pair, because they're not even trying to be different random
+variables, just different (and very similar) functions of the same one.
+The two techniques are independent and combine: control variate +
+antithetic together beats antithetic alone by a further wide margin
+(see `tests/test_asian_option.py`).
 
 ## A volatility surface, not just a point solve
 
@@ -165,8 +193,11 @@ realistic near-expiry case instead of that degenerate extreme.
 - Barrier monitoring checks only the discretized points, not
   continuous-time breaches between them (standard, usually small,
   discretization bias in MC barrier pricing).
-- No control variates (e.g. using the geometric Asian's exact price to
-  reduce the arithmetic Asian's variance further).
+- The control variate here uses a fixed beta fit once per call (not
+  re-estimated adaptively), and only covers the arithmetic Asian --
+  the barrier and vanilla MC pricers have no control variate at all
+  yet (a similar geometric-average or Black-Scholes-based control
+  could plausibly help the barrier pricer too).
 - The dividend yield `q` is a flat CONTINUOUS yield, not a schedule of
   discrete cash dividends on specific dates -- the standard simplifying
   assumption for both Black-Scholes and a CRR tree, but a real
@@ -180,7 +211,8 @@ realistic near-expiry case instead of that degenerate extreme.
 
 ## What I'd build next
 
-- Control variates for the arithmetic Asian option
+- A control variate for the barrier and/or vanilla MC pricers
+  (Black-Scholes itself is a natural control for vanilla MC)
 - Discrete (not just continuous-yield) dividend dates for the binomial
   tree -- the harder, more realistic version of the dividend work above
 - Fit a parametric arbitrage-free surface (e.g. SVI) through noisy

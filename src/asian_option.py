@@ -89,6 +89,56 @@ def monte_carlo_asian_call(S0: float, K: float, r: float, sigma: float, T: float
     return MonteCarloResult(price=price, std_error=std_error)
 
 
+def monte_carlo_asian_call_control_variate(S0: float, K: float, r: float, sigma: float, T: float,
+                                           n_steps: int, n_paths: int,
+                                           antithetic: bool = False, seed: int = None,
+                                           paths: np.ndarray = None) -> MonteCarloResult:
+    """
+    Control variate variance reduction for the arithmetic Asian call,
+    using the geometric Asian's EXACT closed form
+    (geometric_asian_call_closed_form) as the control. On the SAME
+    simulated paths, the arithmetic and geometric averages are very
+    highly correlated -- they're both averages of the identical price
+    path, just averaged differently -- which is exactly the condition
+    that makes a control variate effective.
+
+    Standard control variate estimator, applied per-path:
+        Y_cv_i = Y_i - beta * (X_i - E[X])
+    where Y_i is the discounted arithmetic payoff on path i, X_i is the
+    discounted GEOMETRIC payoff on that SAME path i, E[X] is the EXACT
+    geometric closed-form price (known exactly, not estimated -- that's
+    the entire point of a control variate), and
+        beta_hat = sample_Cov(Y, X) / sample_Var(X)
+    is chosen from the same sample to minimize the resulting variance.
+    mean(Y_cv) is still an unbiased estimator of E[Y] for ANY value of
+    beta (the (X_i - E[X]) term has mean zero by construction, since
+    E[X] is the true mean, not the sample mean) -- estimating beta from
+    the same sample only affects how MUCH variance is removed, not
+    whether the estimator is still valid.
+    """
+    if paths is None:
+        paths = simulate_gbm_paths(S0, r, sigma, T, n_steps, n_paths, antithetic=antithetic, seed=seed)
+
+    monitored = paths[:, 1:]
+    n = monitored.shape[1]  # number of monitored points, matches the closed form's n
+
+    arithmetic_avg = monitored.mean(axis=1)
+    geometric_avg = np.exp(np.log(monitored).mean(axis=1))
+
+    discount = math.exp(-r * T)
+    Y = discount * np.maximum(arithmetic_avg - K, 0.0)
+    X = discount * np.maximum(geometric_avg - K, 0.0)
+    exact_X_mean = geometric_asian_call_closed_form(S0, K, r, sigma, T, n)
+
+    beta_hat = np.cov(Y, X, ddof=1)[0, 1] / np.var(X, ddof=1)
+    Y_cv = Y - beta_hat * (X - exact_X_mean)
+
+    price = float(Y_cv.mean())
+    std_error = _standard_error(Y_cv, antithetic)
+
+    return MonteCarloResult(price=price, std_error=std_error)
+
+
 def _standard_error(discounted_payoffs: np.ndarray, antithetic: bool) -> float:
     """
     THIS FUNCTION EXISTS BECAUSE OF A BUG I FOUND WHILE TESTING: computing
