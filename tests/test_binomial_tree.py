@@ -10,6 +10,11 @@ Tests for binomial_tree.py.
     find the early-exercise branch worth taking).
   - American put >= European put, always (the early-exercise option can
     only add value).
+  - WITH a dividend yield q > 0, that call symmetry breaks: American
+    call > European call becomes possible (and, deep ITM with a high
+    enough q, actual) -- giving up a big enough future dividend stream
+    can make early exercise worth more than holding, which is exactly
+    the classical justification for why dividend-adjusted trees matter.
 """
 import sys
 import os
@@ -70,6 +75,33 @@ def main():
         check(False, "should reject invalid exercise type")
     except ValueError:
         check(True, "correctly rejects invalid exercise type")
+
+    # --- dividend yield q: q=0.0 (the default) must reproduce every
+    # value above EXACTLY -- backward compatible, not a separate path ---
+    euro_call_q0 = binomial_tree_price(S, K, r, sigma, T, 500, "call", "european", q=0.0)
+    check(euro_call_q0 == euro_call, f"q=0.0 reproduces the no-dividend European call price exactly: {euro_call_q0} == {euro_call}")
+
+    # --- WITH a dividend, European tree price still converges to the
+    # dividend-adjusted Black-Scholes closed form ---
+    q = 0.06
+    bs_call_div = black_scholes_price(S, K, r, sigma, T, "call", q=q)
+    euro_call_div = binomial_tree_price(S, K, r, sigma, T, 1000, "call", "european", q=q)
+    check(abs(euro_call_div - bs_call_div) < 0.01,
+          f"European call WITH dividend converges to dividend-adjusted Black-Scholes: "
+          f"tree={euro_call_div:.4f}, BS={bs_call_div:.4f}")
+
+    # --- the actual point of this section: WITH a high enough dividend
+    # yield, American call now has a REAL, nonzero early-exercise
+    # premium over European -- the exact opposite of the q=0 case above,
+    # and the textbook reason dividend-adjusted trees matter at all
+    # (giving up a big enough future dividend stream can make exercising
+    # a call early worth more than holding it) ---
+    S_itm = 120.0  # deep ITM: early exercise is where the premium shows up most clearly
+    euro_call_itm_div = binomial_tree_price(S_itm, K, r, sigma, T, 500, "call", "european", q=q)
+    amer_call_itm_div = binomial_tree_price(S_itm, K, r, sigma, T, 500, "call", "american", q=q)
+    check(amer_call_itm_div > euro_call_itm_div,
+          f"WITH a dividend, American call ({amer_call_itm_div:.4f}) is STRICTLY greater than "
+          f"European ({euro_call_itm_div:.4f}) -- a real early-exercise premium that q=0 never shows")
 
     print()
     if failures == 0:

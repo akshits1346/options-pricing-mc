@@ -79,6 +79,34 @@ def main():
     except ValueError:
         check(True, "correctly rejects non-positive T")
 
+    # --- dividend yield q: q=0.0 (the default) must reproduce every
+    # value above EXACTLY -- q is additive, not a replacement path ---
+    call_q0 = black_scholes_price(S, K, r, sigma, T, "call", q=0.0)
+    check(call_q0 == call_price, f"q=0.0 reproduces the no-dividend call price exactly: {call_q0} == {call_price}")
+    greeks_q0 = black_scholes_greeks(S, K, r, sigma, T, "call", q=0.0)
+    check(greeks_q0.delta == analytic.delta, "q=0.0 reproduces the no-dividend delta exactly")
+
+    # --- dividend-adjusted put-call parity: C - P = S*e^-qT - K*e^-rT,
+    # an exact identity just like the q=0 case above ---
+    q = 0.03
+    call_div = black_scholes_price(S, K, r, sigma, T, "call", q=q)
+    put_div = black_scholes_price(S, K, r, sigma, T, "put", q=q)
+    lhs_div = call_div - put_div
+    rhs_div = S * math.exp(-q * T) - K * math.exp(-r * T)
+    check(abs(lhs_div - rhs_div) < 1e-9,
+          f"dividend-adjusted put-call parity holds exactly: C-P={lhs_div:.6f}, S*e^-qT-Ke^-rT={rhs_div:.6f}")
+    check(call_div < call_price, f"a dividend REDUCES call value vs no dividend: {call_div:.4f} < {call_price:.4f}")
+    check(put_div > put_price, f"a dividend INCREASES put value vs no dividend: {put_div:.4f} > {put_price:.4f}")
+
+    # --- dividend-adjusted delta vs finite difference, same check as
+    # above but with q>0 -- validates the div_discount factor in the
+    # Greeks, not just the price ---
+    analytic_div = black_scholes_greeks(S, K, r, sigma, T, "call", q=q)
+    delta_div_fd = (black_scholes_price(S + eps, K, r, sigma, T, "call", q=q)
+                     - black_scholes_price(S - eps, K, r, sigma, T, "call", q=q)) / (2 * eps)
+    check(abs(analytic_div.delta - delta_div_fd) < 1e-4,
+          f"dividend-adjusted delta matches finite difference: {analytic_div.delta:.6f} vs {delta_div_fd:.6f}")
+
     print()
     if failures == 0:
         print("All Black-Scholes checks passed.")

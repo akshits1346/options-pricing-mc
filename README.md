@@ -40,15 +40,15 @@ vol_surface.py           -- fits implied vol pointwise across a grid of
 ```bash
 pip3 install numpy scipy
 
-python3 tests/test_black_scholes.py     # 8 checks
-python3 tests/test_binomial_tree.py     # 7 checks
+python3 tests/test_black_scholes.py     # 14 checks (incl. dividend yield q)
+python3 tests/test_binomial_tree.py     # 10 checks (incl. dividend yield q)
 python3 tests/test_asian_option.py      # 4 checks
 python3 tests/test_barrier_option.py    # 3 checks
 python3 tests/test_implied_vol.py       # 5 checks
 python3 tests/test_vol_surface.py       # 10 checks
 ```
 
-37 checks total, all passing.
+46 checks total, all passing.
 
 ## Validation strategy
 
@@ -108,6 +108,29 @@ correct one by construction. A checker that never fires is
 indistinguishable from a checker that isn't wired up correctly without
 this half of the test.
 
+## Dividends
+
+`black_scholes_price` / `black_scholes_greeks` / `binomial_tree_price`
+all take an optional continuous dividend yield `q` (0.0 by default,
+reproducing the original no-dividend formulas EXACTLY -- verified in
+each test file, not just assumed). With `q=0`, American call value
+always equals European call value (no dividend, no reason to exercise
+early). The entire point of adding `q` is that this stops being true
+once `q > 0`: giving up a big enough future dividend stream can make
+exercising a call early worth more than holding it. Concretely, at
+`S=120, K=100, r=0.05, sigma=0.20, T=1.0, q=0.06`:
+
+| | European | American |
+|---|---|---|
+| price | 20.12 | **21.05** |
+
+A real, nonzero ~$0.94 early-exercise premium that the same tree, same
+strikes, same everything, shows as EXACTLY zero at `q=0` -- the
+dividend is what creates it, not a modeling artifact. The European
+tree price also still converges to the dividend-adjusted Black-Scholes
+closed form (`q` passed to both), same convergence check as the
+no-dividend case.
+
 ## Two real bugs, found and fixed
 
 **1. Antithetic variance reduction initially showed ~0% improvement.**
@@ -144,9 +167,11 @@ realistic near-expiry case instead of that degenerate extreme.
   discretization bias in MC barrier pricing).
 - No control variates (e.g. using the geometric Asian's exact price to
   reduce the arithmetic Asian's variance further).
-- The binomial tree doesn't model dividends; American-call-equals-
-  European-call would no longer hold with a dividend-paying underlying.
-
+- The dividend yield `q` is a flat CONTINUOUS yield, not a schedule of
+  discrete cash dividends on specific dates -- the standard simplifying
+  assumption for both Black-Scholes and a CRR tree, but a real
+  dividend-paying stock pays discrete amounts on discrete dates, which
+  a continuous yield only approximates.
 - The vol surface's arbitrage checks are static (calendar and
   butterfly conditions on the fitted grid), not a full arbitrage-free
   parametric fit (e.g. SVI) -- it flags violations in a surface built
@@ -156,7 +181,8 @@ realistic near-expiry case instead of that degenerate extreme.
 ## What I'd build next
 
 - Control variates for the arithmetic Asian option
-- Dividend-adjusted binomial tree and Black-Scholes
+- Discrete (not just continuous-yield) dividend dates for the binomial
+  tree -- the harder, more realistic version of the dividend work above
 - Fit a parametric arbitrage-free surface (e.g. SVI) through noisy
   synthetic market quotes, rather than only checking a grid of
   independently-solved points for violations after the fact
